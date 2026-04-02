@@ -41,13 +41,34 @@ import { renderCard, type CardTheme } from "./tui-draw.ts";
 
 import { visibleWidth, truncateToWidth, wrapTextWithAnsi, matchesKey, Key } from "@mariozechner/pi-tui";
 import type { Focusable } from "@mariozechner/pi-tui";
-import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // ── JSONL event logger ──────────────────────────────────────────
+const jsonlWriteQueues = new Map<string, Promise<void>>();
+
 function jsonlAppend(filePath: string, data: Record<string, any>) {
-  appendFileSync(filePath, JSON.stringify(data) + "\n", "utf-8");
+  const line = JSON.stringify(data) + "\n";
+  const prev = jsonlWriteQueues.get(filePath) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(() => appendFile(filePath, line, "utf-8"));
+  jsonlWriteQueues.set(filePath, next);
+  return next;
+}
+
+async function flushJsonl(filePath: string) {
+  const pending = jsonlWriteQueues.get(filePath);
+  if (!pending) return;
+  try {
+    await pending;
+  } catch {
+    // Best-effort logging; tool execution should not fail because log flushing failed.
+  } finally {
+    if (jsonlWriteQueues.get(filePath) === pending) {
+      jsonlWriteQueues.delete(filePath);
+    }
+  }
 }
 
 // ── Subagent card state ─────────────────────────────────────────
@@ -73,11 +94,40 @@ const CARD_THEMES: CardTheme[] = [
   { bg: "\x1b[48;2;15;55;30m",  br: "\x1b[38;2;50;185;100m" },
 ];
 
+const MAX_CARD_MESSAGE_CHARS = 16_000;
+const MAX_PARTIAL_UPDATE_CHARS = 4_000;
+const PARTIAL_UPDATE_INTERVAL_MS = 200;
+const WIDGET_ANIMATION_INTERVAL_MS = 500;
+
 function formatElapsed(startedAt: number, endedAt?: number): string {
   const elapsed = Math.floor(((endedAt ?? Date.now()) - startedAt) / 1000);
   const m = Math.floor(elapsed / 60);
   const s = elapsed % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function hasActiveSubagents() {
+  return subagents.some((sa) => sa.status === "running" || sa.status === "created");
+}
+
+function trimCardMessages(card: SubagentCard) {
+  if (card.messages.length <= MAX_CARD_MESSAGE_CHARS) return;
+  let trimmed = card.messages.slice(-MAX_CARD_MESSAGE_CHARS);
+  const firstNewline = trimmed.indexOf("\n");
+  if (firstNewline >= 0) {
+    trimmed = trimmed.slice(firstNewline + 1);
+  }
+  card.messages = `…\n${trimmed}`;
+}
+
+function appendMessage(card: SubagentCard, msg: string) {
+  card.messages += (card.messages ? "\n" : "") + msg;
+  trimCardMessages(card);
+}
+
+function appendMessageChunk(card: SubagentCard, chunk: string) {
+  card.messages += chunk;
+  trimCardMessages(card);
 }
 
 // ── Shared state — single instance across all nesting levels ────
@@ -86,121 +136,169 @@ let currentCtx: { ui: any } | null = null;
 let mainSessionId = "unknown";
 let subagentCount = 0;
 let flashTimer: ReturnType<typeof setInterval> | null = null;
+let widgetTui: any = null;
+let widgetMounted = false;
+let widgetRenderVersion = 0;
 
 // Track open detail overlay so we can trigger re-renders
 let activeDetailTui: any = null;
 
-function updateSubagentWidget() {
-  if (!currentCtx) return;
-  const ctx = currentCtx;
+function renderSubagentCards(theme: any, width: number): string[] {
+  if (subagents.length === 0) return [];
 
-  // Start flash timer for "working..." dot animation if not already running
-  if (!flashTimer) {
-    flashTimer = setInterval(() => {
-      const hasActive = subagents.some((sa) => sa.status === "running" || sa.status === "created");
-      if (currentCtx && (hasActive || activeDetailTui)) {
-        currentCtx.ui.setWidget(
-          "in-memory-subagent-cards",
-          buildWidgetFactory(),
-          { placement: "aboveEditor" }
-        );
-        // Also re-render the detail overlay if open
-        if (activeDetailTui) {
-          try { activeDetailTui.requestRender(); } catch {}
-        }
+  // Derive cols from columnWidthPercent (all cards share the same value).
+  const pct = subagents[subagents.length - 1].columnWidthPercent;
+  const cols = Math.min(3, Math.max(1, Math.round(100 / pct)));
+  const gap = 1;
+  const colWidth = Math.floor((width - gap * (cols - 1)) / cols);
+  const maxContentLines = 4;
+  const lines: string[] = [""];
+
+  for (let i = 0; i < subagents.length; i += cols) {
+    const rowCards = subagents.slice(i, i + cols).map((sa, idx) => {
+      const cardTheme = CARD_THEMES[(i + idx) % CARD_THEMES.length];
+
+      const titleText = `${sa.title} [${sa.modelLabel}]`;
+      const innerW = colWidth - 4;
+
+      const allText = sa.prompt || "…";
+      const contentLines = allText.split("\n");
+      const trimmedLines = contentLines.map((l) =>
+        visibleWidth(l) > innerW ? truncateToWidth(l, innerW - 1) + "…" : l
+      );
+      const visible = trimmedLines.slice(0, maxContentLines);
+      const content = visible.join("\n") + (contentLines.length > maxContentLines ? "\n…" : "");
+
+      let statusRaw: string;
+      if (sa.status === "created") {
+        statusRaw = "⏳ started";
+      } else if (sa.status === "running") {
+        const dotPhase = Math.floor(Date.now() / 2000) % 3;
+        statusRaw = "⚡ working" + ".".repeat(dotPhase + 1);
+      } else if (sa.status === "completed") {
+        statusRaw = "✅ finished";
+      } else {
+        statusRaw = "❌ error";
       }
-    }, 500);
+
+      const STATUS_WIDTH = 14;
+      const visPad = Math.max(0, STATUS_WIDTH - visibleWidth(statusRaw));
+      const elapsed = formatElapsed(sa.startedAt, sa.endedAt);
+      const footer = `${statusRaw}${" ".repeat(visPad)} ${elapsed}`;
+
+      return renderCard({
+        title: titleText,
+        badge: `#${sa.num}`,
+        content,
+        footer,
+        footerRight: `Ctrl+${sa.num}`,
+        colWidth,
+        theme,
+        cardTheme,
+      });
+    });
+
+    while (rowCards.length < cols) {
+      rowCards.push(Array(rowCards[0].length).fill(" ".repeat(colWidth)));
+    }
+
+    const cardHeight = Math.max(...rowCards.map((c) => c.length));
+    for (const card of rowCards) {
+      while (card.length < cardHeight) {
+        card.push(" ".repeat(colWidth));
+      }
+    }
+
+    for (let row = 0; row < cardHeight; row++) {
+      lines.push(rowCards.map((card) => card[row]).join(" ".repeat(gap)));
+    }
   }
 
-  ctx.ui.setWidget(
+  return lines;
+}
+
+class SubagentCardsWidget {
+  private cachedWidth = -1;
+  private cachedVersion = -1;
+  private cachedLines: string[] = [];
+
+  constructor(
+    private tui: any,
+    private theme: any,
+  ) {
+    widgetTui = tui;
+    widgetMounted = true;
+  }
+
+  render(width: number): string[] {
+    if (width === this.cachedWidth && this.cachedVersion === widgetRenderVersion) {
+      return this.cachedLines;
+    }
+    this.cachedWidth = width;
+    this.cachedVersion = widgetRenderVersion;
+    this.cachedLines = renderSubagentCards(this.theme, width);
+    return this.cachedLines;
+  }
+
+  invalidate(): void {
+    this.cachedWidth = -1;
+    this.cachedVersion = -1;
+  }
+
+  dispose(): void {
+    if (widgetTui === this.tui) widgetTui = null;
+    widgetMounted = false;
+  }
+}
+
+function ensureSubagentWidget() {
+  if (!currentCtx || widgetMounted) return;
+  currentCtx.ui.setWidget(
     "in-memory-subagent-cards",
-    buildWidgetFactory(),
+    (tui: any, theme: any) => new SubagentCardsWidget(tui, theme),
     { placement: "aboveEditor" }
   );
 }
 
-function buildWidgetFactory() {
-  return (_tui: any, theme: any) => ({
-    render(width: number): string[] {
-      if (subagents.length === 0) return [];
-
-      // Derive cols from columnWidthPercent (all cards share the same value).
-      const pct = subagents[subagents.length - 1].columnWidthPercent;
-      const cols = Math.min(3, Math.max(1, Math.round(100 / pct)));
-      const gap = 1;
-      const colWidth = Math.floor((width - gap * (cols - 1)) / cols);
-      const maxContentLines = 4;
-      const lines: string[] = [""];
-
-      for (let i = 0; i < subagents.length; i += cols) {
-        const rowCards = subagents.slice(i, i + cols).map((sa, idx) => {
-          const cardTheme = CARD_THEMES[(i + idx) % CARD_THEMES.length];
-
-          const titleText = `${sa.title} [${sa.modelLabel}]`;
-          const innerW = colWidth - 4;
-
-          // Show the prompt as content
-          const allText = sa.prompt || "…";
-          const contentLines = allText.split("\n");
-          const trimmedLines = contentLines.map((l) =>
-            visibleWidth(l) > innerW ? truncateToWidth(l, innerW - 1) + "…" : l
-          );
-          const visible = trimmedLines.slice(0, maxContentLines);
-          const content = visible.join("\n") + (contentLines.length > maxContentLines ? "\n…" : "");
-
-          // Status indicator with animated dots for "working"
-          // All status strings are padded to the same visible width so the
-          // elapsed-time counter stays in a fixed column.
-          let statusRaw: string;
-          if (sa.status === "created") {
-            statusRaw = "⏳ started";
-          } else if (sa.status === "running") {
-            const dotPhase = Math.floor(Date.now() / 2000) % 3;
-            statusRaw = "⚡ working" + ".".repeat(dotPhase + 1);
-          } else if (sa.status === "completed") {
-            statusRaw = "✅ finished";
-          } else {
-            statusRaw = "❌ error";
-          }
-          // Pad to fixed visible width (longest is "⚡ working..." or "✅ finished")
-          const STATUS_WIDTH = 14;
-          const visPad = Math.max(0, STATUS_WIDTH - visibleWidth(statusRaw));
-          const elapsed = formatElapsed(sa.startedAt, sa.endedAt);
-          const footer = `${statusRaw}${" ".repeat(visPad)} ${elapsed}`;
-
-          return renderCard({
-            title: titleText,
-            badge: `#${sa.num}`,
-            content,
-            footer,
-            footerRight: `Ctrl+${sa.num}`,
-            colWidth,
-            theme,
-            cardTheme,
-          });
-        });
-
-        // Pad incomplete rows
-        while (rowCards.length < cols) {
-          rowCards.push(Array(rowCards[0].length).fill(" ".repeat(colWidth)));
-        }
-
-        const cardHeight = Math.max(...rowCards.map((c) => c.length));
-        for (const card of rowCards) {
-          while (card.length < cardHeight) {
-            card.push(" ".repeat(colWidth));
-          }
-        }
-
-        for (let row = 0; row < cardHeight; row++) {
-          lines.push(rowCards.map((card) => card[row]).join(" ".repeat(gap)));
-        }
+function syncAnimationTimer() {
+  const needsAnimation = hasActiveSubagents() || !!activeDetailTui;
+  if (needsAnimation && !flashTimer) {
+    flashTimer = setInterval(() => {
+      if (!hasActiveSubagents() && !activeDetailTui) {
+        syncAnimationTimer();
+        return;
       }
+      widgetRenderVersion++;
+      try { widgetTui?.requestRender(); } catch {}
+      try { activeDetailTui?.requestRender(); } catch {}
+    }, WIDGET_ANIMATION_INTERVAL_MS);
+    return;
+  }
 
-      return lines;
-    },
-    invalidate() {},
-  });
+  if (!needsAnimation && flashTimer) {
+    clearInterval(flashTimer);
+    flashTimer = null;
+  }
+}
+
+function requestSubagentRender() {
+  widgetRenderVersion++;
+  syncAnimationTimer();
+
+  if (!currentCtx) return;
+  if (subagents.length === 0) {
+    if (widgetMounted) {
+      currentCtx.ui.setWidget("in-memory-subagent-cards", undefined);
+      widgetMounted = false;
+      widgetTui = null;
+    }
+    try { activeDetailTui?.requestRender(); } catch {}
+    return;
+  }
+
+  ensureSubagentWidget();
+  try { widgetTui?.requestRender(); } catch {}
+  try { activeDetailTui?.requestRender(); } catch {}
 }
 
 // ── Detail overlay component ────────────────────────────────────
@@ -310,6 +408,8 @@ class SubagentDetailOverlay implements Focusable {
   invalidate(): void {}
   dispose(): void {
     activeDetailTui = null;
+    syncAnimationTimer();
+    requestSubagentRender();
   }
 }
 
@@ -348,11 +448,6 @@ const SubagentParams = Type.Object({
 });
 
 type SubagentParamsType = Static<typeof SubagentParams>;
-
-// ── Helper: append to card messages ─────────────────────────────
-function appendMessage(card: SubagentCard, msg: string) {
-  card.messages += (card.messages ? "\n" : "") + msg;
-}
 
 // ── Core execution logic ────────────────────────────────────────
 async function executeSubagent(
@@ -443,7 +538,7 @@ async function executeSubagent(
     startedAt: Date.now(),
   };
   subagents.push(card);
-  updateSubagentWidget();
+  requestSubagentRender();
 
   onUpdate?.({
     content: [{ type: "text", text: `Subagent session created: ${session.sessionId}` }],
@@ -464,7 +559,7 @@ async function executeSubagent(
     card.status = "error";
     card.endedAt = Date.now();
     appendMessage(card, "[aborted]");
-    updateSubagentWidget();
+    requestSubagentRender();
   };
 
   try {
@@ -472,6 +567,34 @@ async function executeSubagent(
       let finalText = "";
       let textDeltaBuffer = "";
       let toolcallDeltaBuffer = "";
+      let lastPartialUpdateAt = 0;
+      let lastPartialUpdateText = "";
+
+      const buildPartialText = (extraLine?: string) => {
+        let text = finalText;
+        if (text.length > MAX_PARTIAL_UPDATE_CHARS) {
+          text = `…${text.slice(-MAX_PARTIAL_UPDATE_CHARS)}`;
+        }
+        if (extraLine) {
+          text = text ? `${text}\n${extraLine}` : extraLine;
+        }
+        return text || "...";
+      };
+
+      const emitPartialUpdate = (details: Record<string, any>, extraLine?: string, force = false) => {
+        const now = Date.now();
+        if (!force && now - lastPartialUpdateAt < PARTIAL_UPDATE_INTERVAL_MS) return;
+
+        const text = buildPartialText(extraLine);
+        if (!force && text === lastPartialUpdateText) return;
+
+        lastPartialUpdateAt = now;
+        lastPartialUpdateText = text;
+        onUpdate?.({
+          content: [{ type: "text", text }],
+          details,
+        });
+      };
 
       session.subscribe((event) => {
         const updateData: Record<string, any> = {
@@ -487,7 +610,7 @@ async function executeSubagent(
           case "agent_start":
             card.status = "running";
             appendMessage(card, "[agent started]");
-            updateSubagentWidget();
+            requestSubagentRender();
             jsonlAppend(jsonlPath, baseLog);
             lastEventId = eventId;
             onUpdate?.({
@@ -502,13 +625,10 @@ async function executeSubagent(
               textDeltaBuffer += ame.delta;
               finalText += ame.delta;
               // Append delta text to messages for live view
-              card.messages += ame.delta;
-              onUpdate?.({
-                content: [{ type: "text", text: finalText }],
-                details: {
-                  ...updateData,
-                  data: { assistantMessageEventType: ame.type, delta: ame.delta },
-                },
+              appendMessageChunk(card, ame.delta);
+              emitPartialUpdate({
+                ...updateData,
+                data: { assistantMessageEventType: ame.type, textLength: finalText.length },
               });
             } else if (ame.type === "text_end") {
               if (textDeltaBuffer) {
@@ -518,6 +638,10 @@ async function executeSubagent(
                 jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: ame.type } });
               }
               lastEventId = eventId;
+              emitPartialUpdate({
+                ...updateData,
+                data: { assistantMessageEventType: ame.type, textLength: finalText.length },
+              }, undefined, true);
             } else if (ame.type === "toolcall_delta") {
               if ("delta" in ame) toolcallDeltaBuffer += (ame as any).delta ?? "";
             } else if (ame.type === "toolcall_end") {
@@ -538,43 +662,38 @@ async function executeSubagent(
           }
 
           case "tool_execution_start":
-            appendMessage(card, `\n[🔧 ${event.toolName} ⏳]`);
+            appendMessage(card, `[🔧 ${event.toolName} ⏳]`);
             jsonlAppend(jsonlPath, { ...baseLog, toolName: event.toolName, args: event.args });
             lastEventId = eventId;
-            onUpdate?.({
-              content: [
-                { type: "text", text: finalText + `\n[Tool: ${event.toolName}]` },
-              ],
-              details: {
+            emitPartialUpdate(
+              {
                 ...updateData,
                 data: { toolName: event.toolName, args: event.args },
               },
-            });
+              `[Tool: ${event.toolName}]`,
+              true,
+            );
             break;
 
           case "tool_execution_end":
             appendMessage(card, `[🔧 ${event.toolName} ${event.isError ? "❌" : "✅"}]`);
             jsonlAppend(jsonlPath, { ...baseLog, toolName: event.toolName, isError: event.isError, result: event.result });
             lastEventId = eventId;
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: finalText + `\n[Tool: ${event.toolName} ${event.isError ? "❌" : "✅"}]`,
-                },
-              ],
-              details: {
+            emitPartialUpdate(
+              {
                 ...updateData,
                 data: { toolName: event.toolName, isError: event.isError },
               },
-            });
+              `[Tool: ${event.toolName} ${event.isError ? "❌" : "✅"}]`,
+              true,
+            );
             break;
 
           case "agent_end":
             card.status = "completed";
             card.endedAt = Date.now();
-            appendMessage(card, "\n[agent completed]");
-            updateSubagentWidget();
+            appendMessage(card, "[agent completed]");
+            requestSubagentRender();
             jsonlAppend(jsonlPath, { ...baseLog, finalTextLength: finalText.length });
             resolve(finalText || "Subagent completed with no text output.");
             break;
@@ -585,10 +704,7 @@ async function executeSubagent(
           case "message_end":
             jsonlAppend(jsonlPath, baseLog);
             lastEventId = eventId;
-            onUpdate?.({
-              content: [{ type: "text", text: finalText || "..." }],
-              details: updateData,
-            });
+            emitPartialUpdate(updateData);
             break;
 
           default:
@@ -613,13 +729,14 @@ async function executeSubagent(
         card.status = "error";
         card.endedAt = Date.now();
         appendMessage(card, `[error: ${err?.message ?? String(err)}]`);
-        updateSubagentWidget();
+        requestSubagentRender();
         reject(err);
       });
     });
 
     if (timeoutTimer) clearTimeout(timeoutTimer);
     session.dispose();
+    await flushJsonl(jsonlPath);
 
     const resultPath = join(outDir, "result.md");
     writeFileSync(resultPath, result, "utf-8");
@@ -631,6 +748,7 @@ async function executeSubagent(
   } catch (err: any) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
     session.dispose();
+    await flushJsonl(jsonlPath);
 
     const errorMsg = err?.message ?? String(err);
     const errorPath = join(outDir, "error.md");
@@ -681,13 +799,22 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
     mainSessionId = ctx.sessionManager.getSessionId?.() ?? `session-${Date.now()}`;
     subagentCount = 0;
-    updateSubagentWidget();
+    subagents.length = 0;
+    activeDetailTui = null;
+    widgetMounted = false;
+    widgetTui = null;
+    if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+    ctx.ui.setWidget("in-memory-subagent-cards", undefined);
+    requestSubagentRender();
   });
 
   pi.registerCommand("in-memory-clear-widgets", {
     description: "Clear all in-memory subagent card widgets",
     handler: async (_args, ctx) => {
       subagents.length = 0;
+      activeDetailTui = null;
+      widgetMounted = false;
+      widgetTui = null;
       if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
       ctx.ui.setWidget("in-memory-subagent-cards", undefined);
       ctx.ui.notify("In-memory subagent widgets cleared", "info");
@@ -722,6 +849,8 @@ export default function (pi: ExtensionAPI) {
         );
 
         activeDetailTui = null;
+        syncAnimationTimer();
+        requestSubagentRender();
       },
     });
   }
