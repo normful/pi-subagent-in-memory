@@ -30,9 +30,6 @@ import {
   DefaultResourceLoader,
   getAgentDir,
   createCodingTools,
-  createGrepTool,
-  createFindTool,
-  createLsTool,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type {
@@ -553,9 +550,6 @@ async function executeSubagent(
   // Create tools for the subagent, including nested subagent support
   const tools = [
     ...createCodingTools(cwd),
-    createGrepTool(cwd),
-    createFindTool(cwd),
-    createLsTool(cwd),
     createSubagentAgentTool(providerName, modelId, cwd),
   ];
 
