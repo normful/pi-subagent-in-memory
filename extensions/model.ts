@@ -11,7 +11,10 @@ export interface ResolvedModel {
  * Resolve a model and its API key using ModelRegistry + AuthStorage.
  * Supports subscription/OAuth-based API keys without requiring env vars.
  */
-export async function resolveModel(provider: string, modelId: string): Promise<ResolvedModel> {
+export async function resolveModel(
+  provider: string,
+  modelId: string,
+): Promise<ResolvedModel> {
   const authStorage = AuthStorage.create();
   const modelRegistry = new ModelRegistry(authStorage);
 
@@ -31,7 +34,9 @@ export async function resolveModel(provider: string, modelId: string): Promise<R
     }
   }
   if (!model) {
-    throw new Error(`Could not find model ${provider}/${modelId}. Check provider and model parameters.`);
+    throw new Error(
+      `Could not find model ${provider}/${modelId}. Check provider and model parameters.`,
+    );
   }
 
   // Resolve API key: try ModelRegistry, then AuthStorage directly
@@ -43,7 +48,9 @@ export async function resolveModel(provider: string, modelId: string): Promise<R
     apiKey = await authStorage.getApiKey(provider);
   }
   if (!apiKey) {
-    throw new Error(`No API key for ${provider}. Login or set the appropriate API key env var.`);
+    throw new Error(
+      `No API key for ${provider}. Login or set the appropriate API key env var.`,
+    );
   }
 
   return { model, apiKey };

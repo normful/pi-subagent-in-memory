@@ -8,8 +8,8 @@ const FG_RESET = "\x1b[39m";
 const BG_RESET = "\x1b[49m";
 
 export interface CardTheme {
-  bg: string;   // ANSI bg escape
-  br: string;   // ANSI fg escape for borders
+  bg: string; // ANSI bg escape
+  br: string; // ANSI fg escape for borders
 }
 
 export interface RenderCardOptions {
@@ -51,7 +51,16 @@ export function renderCard(opts: RenderCardOptions): string[] {
     const badgeVisLen = visibleWidth(badgeText);
     const textVisLen = visibleWidth(text);
     const gap = Math.max(1, w - textVisLen - badgeVisLen);
-    return bord("│") + bg + text + bg + " ".repeat(gap) + styledBadge + BG_RESET + bord("│");
+    return (
+      bord("│") +
+      bg +
+      text +
+      bg +
+      " ".repeat(gap) +
+      styledBadge +
+      BG_RESET +
+      bord("│")
+    );
   };
 
   const top = "┌" + "─".repeat(w) + "┐";
@@ -60,7 +69,10 @@ export function renderCard(opts: RenderCardOptions): string[] {
   const lines: string[] = [bord(top)];
 
   // Title line — with optional badge on the right
-  const truncTitle = truncateToWidth(title, badge ? w - visibleWidth(badge) - 2 : w - 1);
+  const truncTitle = truncateToWidth(
+    title,
+    badge ? w - visibleWidth(badge) - 2 : w - 1,
+  );
   const styledTitle = theme.fg("accent", theme.bold(truncTitle));
   if (badge) {
     lines.push(borderLineWithBadge(" " + styledTitle, badge));

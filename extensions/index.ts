@@ -35,11 +35,20 @@ import {
   createLsTool,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-coding-agent";
+import type {
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@mariozechner/pi-coding-agent";
 import { resolveModel } from "./model.ts";
 import { renderCard, type CardTheme } from "./tui-draw.ts";
 
-import { visibleWidth, truncateToWidth, wrapTextWithAnsi, matchesKey, Key } from "@mariozechner/pi-tui";
+import {
+  visibleWidth,
+  truncateToWidth,
+  wrapTextWithAnsi,
+  matchesKey,
+  Key,
+} from "@mariozechner/pi-tui";
 import type { Focusable } from "@mariozechner/pi-tui";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
@@ -52,7 +61,9 @@ const jsonlWriteQueues = new Map<string, Promise<void>>();
 function jsonlAppend(filePath: string, data: Record<string, any>) {
   const line = JSON.stringify(data) + "\n";
   const prev = jsonlWriteQueues.get(filePath) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(() => appendFile(filePath, line, "utf-8"));
+  const next = prev
+    .catch(() => {})
+    .then(() => appendFile(filePath, line, "utf-8"));
   jsonlWriteQueues.set(filePath, next);
   return next;
 }
@@ -86,12 +97,12 @@ interface SubagentCard {
 }
 
 const CARD_THEMES: CardTheme[] = [
-  { bg: "\x1b[48;2;20;30;75m",  br: "\x1b[38;2;70;110;210m" },
-  { bg: "\x1b[48;2;80;18;28m",  br: "\x1b[38;2;210;65;85m" },
-  { bg: "\x1b[48;2;50;22;85m",  br: "\x1b[38;2;145;80;220m" },
-  { bg: "\x1b[48;2;12;65;75m",  br: "\x1b[38;2;40;175;195m" },
-  { bg: "\x1b[48;2;55;50;10m",  br: "\x1b[38;2;190;170;50m" },
-  { bg: "\x1b[48;2;15;55;30m",  br: "\x1b[38;2;50;185;100m" },
+  { bg: "\x1b[48;2;20;30;75m", br: "\x1b[38;2;70;110;210m" },
+  { bg: "\x1b[48;2;80;18;28m", br: "\x1b[38;2;210;65;85m" },
+  { bg: "\x1b[48;2;50;22;85m", br: "\x1b[38;2;145;80;220m" },
+  { bg: "\x1b[48;2;12;65;75m", br: "\x1b[38;2;40;175;195m" },
+  { bg: "\x1b[48;2;55;50;10m", br: "\x1b[38;2;190;170;50m" },
+  { bg: "\x1b[48;2;15;55;30m", br: "\x1b[38;2;50;185;100m" },
 ];
 
 const MAX_CARD_MESSAGE_CHARS = 16_000;
@@ -107,7 +118,9 @@ function formatElapsed(startedAt: number, endedAt?: number): string {
 }
 
 function hasActiveSubagents() {
-  return subagents.some((sa) => sa.status === "running" || sa.status === "created");
+  return subagents.some(
+    (sa) => sa.status === "running" || sa.status === "created",
+  );
 }
 
 function trimCardMessages(card: SubagentCard) {
@@ -164,10 +177,12 @@ function renderSubagentCards(theme: any, width: number): string[] {
       const allText = sa.prompt || "…";
       const contentLines = allText.split("\n");
       const trimmedLines = contentLines.map((l) =>
-        visibleWidth(l) > innerW ? truncateToWidth(l, innerW - 1) + "…" : l
+        visibleWidth(l) > innerW ? truncateToWidth(l, innerW - 1) + "…" : l,
       );
       const visible = trimmedLines.slice(0, maxContentLines);
-      const content = visible.join("\n") + (contentLines.length > maxContentLines ? "\n…" : "");
+      const content =
+        visible.join("\n") +
+        (contentLines.length > maxContentLines ? "\n…" : "");
 
       let statusRaw: string;
       if (sa.status === "created") {
@@ -231,7 +246,10 @@ class SubagentCardsWidget {
   }
 
   render(width: number): string[] {
-    if (width === this.cachedWidth && this.cachedVersion === widgetRenderVersion) {
+    if (
+      width === this.cachedWidth &&
+      this.cachedVersion === widgetRenderVersion
+    ) {
       return this.cachedLines;
     }
     this.cachedWidth = width;
@@ -256,7 +274,7 @@ function ensureSubagentWidget() {
   currentCtx.ui.setWidget(
     "in-memory-subagent-cards",
     (tui: any, theme: any) => new SubagentCardsWidget(tui, theme),
-    { placement: "aboveEditor" }
+    { placement: "aboveEditor" },
   );
 }
 
@@ -269,8 +287,12 @@ function syncAnimationTimer() {
         return;
       }
       widgetRenderVersion++;
-      try { widgetTui?.requestRender(); } catch {}
-      try { activeDetailTui?.requestRender(); } catch {}
+      try {
+        widgetTui?.requestRender();
+      } catch {}
+      try {
+        activeDetailTui?.requestRender();
+      } catch {}
     }, WIDGET_ANIMATION_INTERVAL_MS);
     return;
   }
@@ -292,13 +314,19 @@ function requestSubagentRender() {
       widgetMounted = false;
       widgetTui = null;
     }
-    try { activeDetailTui?.requestRender(); } catch {}
+    try {
+      activeDetailTui?.requestRender();
+    } catch {}
     return;
   }
 
   ensureSubagentWidget();
-  try { widgetTui?.requestRender(); } catch {}
-  try { activeDetailTui?.requestRender(); } catch {}
+  try {
+    widgetTui?.requestRender();
+  } catch {}
+  try {
+    activeDetailTui?.requestRender();
+  } catch {}
 }
 
 // ── Detail overlay component ────────────────────────────────────
@@ -335,8 +363,7 @@ class SubagentDetailOverlay implements Focusable {
     };
     const row = (content: string) =>
       th.fg("border", "│") + pad(content, innerW) + th.fg("border", "│");
-    const divider = () =>
-      th.fg("border", "├" + "─".repeat(innerW) + "┤");
+    const divider = () => th.fg("border", "├" + "─".repeat(innerW) + "┤");
 
     const lines: string[] = [];
 
@@ -344,13 +371,21 @@ class SubagentDetailOverlay implements Focusable {
     lines.push(th.fg("border", "╭" + "─".repeat(innerW) + "╮"));
 
     // Header
-    const statusIcon = sa.status === "created" ? "⏳"
-      : sa.status === "running" ? "⚡"
-      : sa.status === "completed" ? "✅"
-      : "❌";
+    const statusIcon =
+      sa.status === "created"
+        ? "⏳"
+        : sa.status === "running"
+          ? "⚡"
+          : sa.status === "completed"
+            ? "✅"
+            : "❌";
     const headerText = ` ${statusIcon} Subagent #${sa.num}: ${sa.title} [${sa.modelLabel}]`;
-    lines.push(row(th.fg("accent", th.bold(truncateToWidth(headerText, innerW)))));
-    lines.push(row(th.fg("dim", ` ${formatElapsed(sa.startedAt, sa.endedAt)} elapsed`)));
+    lines.push(
+      row(th.fg("accent", th.bold(truncateToWidth(headerText, innerW)))),
+    );
+    lines.push(
+      row(th.fg("dim", ` ${formatElapsed(sa.startedAt, sa.endedAt)} elapsed`)),
+    );
 
     // Prompt section — word-wrap to show at least 3 lines, max 5
     lines.push(divider());
@@ -368,7 +403,9 @@ class SubagentDetailOverlay implements Focusable {
       lines.push(row(""));
     }
     if (promptLines.length > PROMPT_MAX) {
-      lines.push(row(th.fg("dim", ` … (${promptLines.length - PROMPT_MAX} more lines)`)));
+      lines.push(
+        row(th.fg("dim", ` … (${promptLines.length - PROMPT_MAX} more lines)`)),
+      );
     }
 
     // Messages section — always show latest 5 lines
@@ -389,7 +426,14 @@ class SubagentDetailOverlay implements Focusable {
       lines.push(row(""));
     }
     if (allMsgLines.length > MSG_VISIBLE) {
-      lines.push(row(th.fg("dim", ` … ${allMsgLines.length - MSG_VISIBLE} earlier lines hidden`)));
+      lines.push(
+        row(
+          th.fg(
+            "dim",
+            ` … ${allMsgLines.length - MSG_VISIBLE} earlier lines hidden`,
+          ),
+        ),
+      );
     }
 
     // Bottom border with right-aligned hint
@@ -398,8 +442,8 @@ class SubagentDetailOverlay implements Focusable {
     const dashBefore = Math.max(0, innerW - hintLen);
     lines.push(
       th.fg("border", "╰" + "─".repeat(dashBefore)) +
-      th.fg("dim", hint) +
-      th.fg("border", "╯")
+        th.fg("dim", hint) +
+        th.fg("border", "╯"),
     );
 
     return lines;
@@ -417,16 +461,28 @@ class SubagentDetailOverlay implements Focusable {
 const SubagentParams = Type.Object({
   task: Type.String({ description: "The task for the subagent to perform" }),
   title: Type.Optional(
-    Type.String({ description: "Display title for the subagent card. Defaults to a truncated version of the task." })
+    Type.String({
+      description:
+        "Display title for the subagent card. Defaults to a truncated version of the task.",
+    }),
   ),
   provider: Type.Optional(
-    Type.String({ description: "LLM provider (e.g. 'anthropic', 'google'). Defaults to the main agent's provider." })
+    Type.String({
+      description:
+        "LLM provider (e.g. 'anthropic', 'google'). Defaults to the main agent's provider.",
+    }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Model ID (e.g. 'claude-sonnet-4-5'). Defaults to the main agent's model." })
+    Type.String({
+      description:
+        "Model ID (e.g. 'claude-sonnet-4-5'). Defaults to the main agent's model.",
+    }),
   ),
   cwd: Type.Optional(
-    Type.String({ description: "Working directory for the subagent. Defaults to the main agent's cwd." })
+    Type.String({
+      description:
+        "Working directory for the subagent. Defaults to the main agent's cwd.",
+    }),
   ),
   timeout: Type.Optional(
     Type.Number({
@@ -434,7 +490,7 @@ const SubagentParams = Type.Object({
         "Timeout in seconds for the subagent execution. If exceeded, the subagent is aborted. " +
         "Defaults to unlimited (no timeout).",
       minimum: 1,
-    })
+    }),
   ),
   columnWidthPercent: Type.Optional(
     Type.Number({
@@ -443,7 +499,7 @@ const SubagentParams = Type.Object({
         "Max 3 cards per row. Defaults to 50.",
       minimum: 33,
       maximum: 100,
-    })
+    }),
   ),
 });
 
@@ -461,7 +517,12 @@ async function executeSubagent(
 ): Promise<AgentToolResult<any>> {
   subagentCount++;
   const subagentNum = subagentCount;
-  const outDir = join(".pi", "subagent-in-memory", mainSessionId, `subagent_${subagentNum}`);
+  const outDir = join(
+    ".pi",
+    "subagent-in-memory",
+    mainSessionId,
+    `subagent_${subagentNum}`,
+  );
   mkdirSync(outDir, { recursive: true });
 
   // Parse "provider/model" format (e.g. "openai/gpt-4o-mini")
@@ -474,10 +535,15 @@ async function executeSubagent(
   }
 
   if (!providerName || !modelId) {
-    throw new Error("Could not determine model. Provide provider and model parameters.");
+    throw new Error(
+      "Could not determine model. Provide provider and model parameters.",
+    );
   }
 
-  const { model: resolvedModel, apiKey } = await resolveModel(providerName, modelId);
+  const { model: resolvedModel, apiKey } = await resolveModel(
+    providerName,
+    modelId,
+  );
 
   const cwd = params.cwd ?? fallbackCwd ?? process.cwd();
 
@@ -541,7 +607,9 @@ async function executeSubagent(
   requestSubagentRender();
 
   onUpdate?.({
-    content: [{ type: "text", text: `Subagent session created: ${session.sessionId}` }],
+    content: [
+      { type: "text", text: `Subagent session created: ${session.sessionId}` },
+    ],
     details: { sessionId: session.sessionId, status: "created" },
   });
 
@@ -581,9 +649,14 @@ async function executeSubagent(
         return text || "...";
       };
 
-      const emitPartialUpdate = (details: Record<string, any>, extraLine?: string, force = false) => {
+      const emitPartialUpdate = (
+        details: Record<string, any>,
+        extraLine?: string,
+        force = false,
+      ) => {
         const now = Date.now();
-        if (!force && now - lastPartialUpdateAt < PARTIAL_UPDATE_INTERVAL_MS) return;
+        if (!force && now - lastPartialUpdateAt < PARTIAL_UPDATE_INTERVAL_MS)
+          return;
 
         const text = buildPartialText(extraLine);
         if (!force && text === lastPartialUpdateText) return;
@@ -604,7 +677,12 @@ async function executeSubagent(
 
         const eventId = randomUUID().slice(0, 8);
         const eventTs = new Date().toISOString();
-        const baseLog = { type: event.type, id: eventId, parentId: lastEventId, timestamp: eventTs };
+        const baseLog = {
+          type: event.type,
+          id: eventId,
+          parentId: lastEventId,
+          timestamp: eventTs,
+        };
 
         switch (event.type) {
           case "agent_start":
@@ -628,34 +706,69 @@ async function executeSubagent(
               appendMessageChunk(card, ame.delta);
               emitPartialUpdate({
                 ...updateData,
-                data: { assistantMessageEventType: ame.type, textLength: finalText.length },
+                data: {
+                  assistantMessageEventType: ame.type,
+                  textLength: finalText.length,
+                },
               });
             } else if (ame.type === "text_end") {
               if (textDeltaBuffer) {
-                jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: "text", text: textDeltaBuffer } });
+                jsonlAppend(jsonlPath, {
+                  ...baseLog,
+                  data: {
+                    assistantMessageEventType: "text",
+                    text: textDeltaBuffer,
+                  },
+                });
                 textDeltaBuffer = "";
               } else {
-                jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: ame.type } });
+                jsonlAppend(jsonlPath, {
+                  ...baseLog,
+                  data: { assistantMessageEventType: ame.type },
+                });
               }
               lastEventId = eventId;
-              emitPartialUpdate({
-                ...updateData,
-                data: { assistantMessageEventType: ame.type, textLength: finalText.length },
-              }, undefined, true);
+              emitPartialUpdate(
+                {
+                  ...updateData,
+                  data: {
+                    assistantMessageEventType: ame.type,
+                    textLength: finalText.length,
+                  },
+                },
+                undefined,
+                true,
+              );
             } else if (ame.type === "toolcall_delta") {
-              if ("delta" in ame) toolcallDeltaBuffer += (ame as any).delta ?? "";
+              if ("delta" in ame)
+                toolcallDeltaBuffer += (ame as any).delta ?? "";
             } else if (ame.type === "toolcall_end") {
               if (toolcallDeltaBuffer) {
-                jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: "toolcall", content: toolcallDeltaBuffer } });
+                jsonlAppend(jsonlPath, {
+                  ...baseLog,
+                  data: {
+                    assistantMessageEventType: "toolcall",
+                    content: toolcallDeltaBuffer,
+                  },
+                });
                 toolcallDeltaBuffer = "";
               } else {
-                jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: ame.type } });
+                jsonlAppend(jsonlPath, {
+                  ...baseLog,
+                  data: { assistantMessageEventType: ame.type },
+                });
               }
               lastEventId = eventId;
-            } else if (ame.type === "text_start" || ame.type === "toolcall_start") {
+            } else if (
+              ame.type === "text_start" ||
+              ame.type === "toolcall_start"
+            ) {
               // Skip start markers
             } else {
-              jsonlAppend(jsonlPath, { ...baseLog, data: { assistantMessageEventType: ame.type } });
+              jsonlAppend(jsonlPath, {
+                ...baseLog,
+                data: { assistantMessageEventType: ame.type },
+              });
               lastEventId = eventId;
             }
             break;
@@ -663,7 +776,11 @@ async function executeSubagent(
 
           case "tool_execution_start":
             appendMessage(card, `[🔧 ${event.toolName} ⏳]`);
-            jsonlAppend(jsonlPath, { ...baseLog, toolName: event.toolName, args: event.args });
+            jsonlAppend(jsonlPath, {
+              ...baseLog,
+              toolName: event.toolName,
+              args: event.args,
+            });
             lastEventId = eventId;
             emitPartialUpdate(
               {
@@ -676,8 +793,16 @@ async function executeSubagent(
             break;
 
           case "tool_execution_end":
-            appendMessage(card, `[🔧 ${event.toolName} ${event.isError ? "❌" : "✅"}]`);
-            jsonlAppend(jsonlPath, { ...baseLog, toolName: event.toolName, isError: event.isError, result: event.result });
+            appendMessage(
+              card,
+              `[🔧 ${event.toolName} ${event.isError ? "❌" : "✅"}]`,
+            );
+            jsonlAppend(jsonlPath, {
+              ...baseLog,
+              toolName: event.toolName,
+              isError: event.isError,
+              result: event.result,
+            });
             lastEventId = eventId;
             emitPartialUpdate(
               {
@@ -694,7 +819,10 @@ async function executeSubagent(
             card.endedAt = Date.now();
             appendMessage(card, "[agent completed]");
             requestSubagentRender();
-            jsonlAppend(jsonlPath, { ...baseLog, finalTextLength: finalText.length });
+            jsonlAppend(jsonlPath, {
+              ...baseLog,
+              finalTextLength: finalText.length,
+            });
             resolve(finalText || "Subagent completed with no text output.");
             break;
 
@@ -742,8 +870,17 @@ async function executeSubagent(
     writeFileSync(resultPath, result, "utf-8");
 
     return {
-      content: [{ type: "text", text: `Execution succeeded. Result is in \`${resultPath}\`` }],
-      details: { sessionId: session.sessionId, status: "completed", outputDir: outDir },
+      content: [
+        {
+          type: "text",
+          text: `Execution succeeded. Result is in \`${resultPath}\``,
+        },
+      ],
+      details: {
+        sessionId: session.sessionId,
+        status: "completed",
+        outputDir: outDir,
+      },
     };
   } catch (err: any) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -755,8 +892,17 @@ async function executeSubagent(
     writeFileSync(errorPath, `# Subagent Error\n\n${errorMsg}\n`, "utf-8");
 
     return {
-      content: [{ type: "text", text: `Execution failed. Detail is in \`${errorPath}\`` }],
-      details: { sessionId: session.sessionId, status: "error", outputDir: outDir },
+      content: [
+        {
+          type: "text",
+          text: `Execution failed. Detail is in \`${errorPath}\``,
+        },
+      ],
+      details: {
+        sessionId: session.sessionId,
+        status: "error",
+        outputDir: outDir,
+      },
     };
   }
 }
@@ -797,13 +943,17 @@ function createSubagentAgentTool(
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    mainSessionId = ctx.sessionManager.getSessionId?.() ?? `session-${Date.now()}`;
+    mainSessionId =
+      ctx.sessionManager.getSessionId?.() ?? `session-${Date.now()}`;
     subagentCount = 0;
     subagents.length = 0;
     activeDetailTui = null;
     widgetMounted = false;
     widgetTui = null;
-    if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+    if (flashTimer) {
+      clearInterval(flashTimer);
+      flashTimer = null;
+    }
     ctx.ui.setWidget("in-memory-subagent-cards", undefined);
     requestSubagentRender();
   });
@@ -815,7 +965,10 @@ export default function (pi: ExtensionAPI) {
       activeDetailTui = null;
       widgetMounted = false;
       widgetTui = null;
-      if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+      if (flashTimer) {
+        clearInterval(flashTimer);
+        flashTimer = null;
+      }
       ctx.ui.setWidget("in-memory-subagent-cards", undefined);
       ctx.ui.notify("In-memory subagent widgets cleared", "info");
     },
@@ -833,7 +986,12 @@ export default function (pi: ExtensionAPI) {
         }
 
         await ctx.ui.custom<void>(
-          (tui: any, theme: any, _keybindings: any, done: (result: void) => void) => {
+          (
+            tui: any,
+            theme: any,
+            _keybindings: any,
+            done: (result: void) => void,
+          ) => {
             activeDetailTui = tui;
             return new SubagentDetailOverlay(card, n, theme, done);
           },
@@ -845,7 +1003,7 @@ export default function (pi: ExtensionAPI) {
               maxHeight: "80%",
               minWidth: 60,
             },
-          }
+          },
         );
 
         activeDetailTui = null;
