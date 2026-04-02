@@ -14,7 +14,7 @@
  * - JSONL event logging to ~/.pi/subagent-in-memory/<sessionId>/
  * - Nested subagent support (subagents can spawn subagents)
  * - /in-memory-clear-widgets slash command to remove widget cards
- * - Multi-provider support (Anthropic, OpenAI, Google, etc.)
+ * - Subagents inherit provider and model from parent agent
  * - Ctrl+Alt+<N> to inspect subagent prompt & live messages
  *
  * Results are written to ./.pi/subagent-in-memory/<mainSessionId>/subagent_<N>/result.md
@@ -457,24 +457,6 @@ class SubagentDetailOverlay implements Focusable {
 // ── Parameter schema ────────────────────────────────────────────
 const SubagentParams = Type.Object({
   task: Type.String({ description: "The task for the subagent to perform" }),
-  title: Type.Optional(
-    Type.String({
-      description:
-        "Display title for the subagent card. Defaults to a truncated version of the task.",
-    }),
-  ),
-  provider: Type.Optional(
-    Type.String({
-      description:
-        "LLM provider (e.g. 'anthropic', 'google'). Defaults to the main agent's provider.",
-    }),
-  ),
-  model: Type.Optional(
-    Type.String({
-      description:
-        "Model ID (e.g. 'claude-sonnet-4-5'). Defaults to the main agent's model.",
-    }),
-  ),
   cwd: Type.Optional(
     Type.String({
       description:
@@ -489,15 +471,6 @@ const SubagentParams = Type.Object({
       minimum: 1,
     }),
   ),
-  columnWidthPercent: Type.Optional(
-    Type.Number({
-      description:
-        "Width of this subagent's card as a percentage of terminal width (e.g. 50 for 2 parallel agents, 33 for 3). " +
-        "Max 3 cards per row. Defaults to 50.",
-      minimum: 33,
-      maximum: 100,
-    }),
-  ),
 });
 
 type SubagentParamsType = Static<typeof SubagentParams>;
@@ -508,9 +481,9 @@ async function executeSubagent(
   params: SubagentParamsType,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback | undefined,
-  fallbackProvider?: string,
-  fallbackModel?: string,
-  fallbackCwd?: string,
+  fallbackCwd: string,
+  fallbackProvider: string,
+  fallbackModel: string,
 ): Promise<AgentToolResult<any>> {
   subagentCount++;
   const subagentNum = subagentCount;
@@ -522,14 +495,8 @@ async function executeSubagent(
   );
   mkdirSync(outDir, { recursive: true });
 
-  // Parse "provider/model" format (e.g. "openai/gpt-4o-mini")
-  let providerName = params.provider ?? fallbackProvider;
-  let modelId = params.model ?? fallbackModel;
-  if (modelId && !params.provider && modelId.includes("/")) {
-    const slashIdx = modelId.indexOf("/");
-    providerName = modelId.slice(0, slashIdx);
-    modelId = modelId.slice(slashIdx + 1);
-  }
+  const providerName = fallbackProvider;
+  const modelId = fallbackModel;
 
   if (!providerName || !modelId) {
     throw new Error(
@@ -550,7 +517,7 @@ async function executeSubagent(
   // Create tools for the subagent, including nested subagent support
   const tools = [
     ...createCodingTools(cwd),
-    createSubagentAgentTool(providerName, modelId, cwd),
+    createSubagentAgentTool(cwd),
   ];
 
   const resourceLoader = new DefaultResourceLoader({
@@ -581,7 +548,6 @@ async function executeSubagent(
     provider: providerName,
     model: modelId,
     task: params.task,
-    title: params.title,
   });
   let lastEventId = session.sessionId;
 
@@ -589,12 +555,12 @@ async function executeSubagent(
   const card: SubagentCard = {
     num: subagentNum,
     sessionId: session.sessionId,
-    title: params.title ?? params.task.slice(0, 30),
+    title: params.task.slice(0, 30),
     modelLabel: modelId,
     status: "created",
     prompt: params.task,
     messages: "",
-    columnWidthPercent: params.columnWidthPercent ?? 50,
+    columnWidthPercent: 50,
     startedAt: Date.now(),
   };
   subagents.push(card);
@@ -902,17 +868,14 @@ async function executeSubagent(
 }
 
 // ── AgentTool factory for nested subagent sessions ──────────────
-function createSubagentAgentTool(
-  parentProvider: string,
-  parentModel: string,
-  parentCwd: string,
-) {
+function createSubagentAgentTool(parentCwd: string) {
   return {
     name: "subagent_create",
     label: "Subagent",
     description:
       "Create a subagent to perform a task. The subagent runs in-process with its own session. " +
-      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes.",
+      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes. " +
+      "The subagent inherits its provider and model from the parent agent.",
     parameters: SubagentParams,
     async execute(
       toolCallId: string,
@@ -925,9 +888,9 @@ function createSubagentAgentTool(
         params,
         signal,
         onUpdate,
-        parentProvider,
-        parentModel,
         parentCwd,
+        "",
+        "",
       );
     },
   };
@@ -1012,23 +975,19 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description:
       "Create a subagent to perform a task. The subagent runs in-process with its own session. " +
-      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes.",
+      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes. " +
+      "The subagent inherits its provider and model from the parent agent.",
     parameters: SubagentParams,
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const mainModel = ctx.model;
-      const providerName = params.provider ?? mainModel?.provider;
-      const modelId = params.model ?? mainModel?.id;
-      const cwd = params.cwd ?? ctx.cwd;
-
       return executeSubagent(
         toolCallId,
         params,
         signal,
         onUpdate,
-        providerName,
-        modelId,
-        cwd,
+        ctx.cwd,
+        ctx.model?.provider ?? "",
+        ctx.model?.id ?? "",
       );
     },
   });
