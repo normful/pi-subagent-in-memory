@@ -456,18 +456,15 @@ class SubagentDetailOverlay implements Focusable {
 
 // ── Parameter schema ────────────────────────────────────────────
 const SubagentParams = Type.Object({
-  task: Type.String({ description: "The task for the subagent to perform" }),
+  task: Type.String({ description: "Task" }),
   cwd: Type.Optional(
     Type.String({
-      description:
-        "Working directory for the subagent. Defaults to the main agent's cwd.",
+      description: "Working directory. Default: parent's cwd.",
     }),
   ),
   timeout: Type.Optional(
     Type.Number({
-      description:
-        "Timeout in seconds for the subagent execution. If exceeded, the subagent is aborted. " +
-        "Defaults to unlimited (no timeout).",
+      description: "Timeout in seconds. Aborts if exceeded.",
       minimum: 1,
     }),
   ),
@@ -873,9 +870,7 @@ function createSubagentAgentTool(parentCwd: string) {
     name: "subagent_create",
     label: "Subagent",
     description:
-      "Create a subagent to perform a task. The subagent runs in-process with its own session. " +
-      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes. " +
-      "The subagent inherits its provider and model from the parent agent.",
+      "Create a subagent. Runs in-process, inherits parent's provider/model, streams progress.",
     parameters: SubagentParams,
     async execute(
       toolCallId: string,
@@ -974,9 +969,7 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_create",
     label: "Subagent",
     description:
-      "Create a subagent to perform a task. The subagent runs in-process with its own session. " +
-      "Progress is streamed back as execution updates. Returns the final result when the subagent finishes. " +
-      "The subagent inherits its provider and model from the parent agent.",
+      "Create a subagent. Runs in-process, inherits parent's provider/model, streams progress.",
     parameters: SubagentParams,
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
